@@ -1,0 +1,10 @@
+server:
+  port: "8080"
+
+backends:
+  - "http://backend1:8000"
+  - "http://backend2:8000"
+
+rate_limit:
+  default_capacity: 100
+  default_rate: 1s
