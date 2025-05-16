@@ -1,0 +1,57 @@
+services:
+  balancer:
+    build: .
+    ports:
+      - "8080:8080"
+    depends_on:
+      backend1:
+        condition: service_healthy
+      backend2:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      - CONFIG_PATH=/config/config.yaml
+
+  postgres:
+    image: postgres:latest
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: 12345
+      POSTGRES_DB: balancer
+    ports:
+      - "5000:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d balancer"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend1:
+    image: nginx
+    ports:
+      - "8081:80"
+    volumes:
+      - ./test/backend1:/usr/share/nginx/html
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend2:
+    image: nginx
+    ports:
+      - "8082:80"
+    volumes:
+      - ./test/backend2:/usr/share/nginx/html
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres_data:

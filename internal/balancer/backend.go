@@ -29,8 +29,8 @@ func (b *Backend) IsAlive() bool {
 }
 
 type BackendPool struct {
-	backends []*Backend
-	current  uint64
+	Backends []*Backend
+	mu       sync.RWMutex 
 }
 
 func NewBackendPool(backendURLs []string) *BackendPool {
@@ -48,33 +48,28 @@ func NewBackendPool(backendURLs []string) *BackendPool {
 		}
 
 		backends = append(backends, &Backend{
-			URL: backendURL,
-			Alive: true,
+			URL:          backendURL,
+			Alive:        true,
 			ReverseProxy: proxy,
 		})
 	}
-	return &BackendPool{backends: backends}
+	return &BackendPool{Backends: backends}
 }
 
-func (p *BackendPool) Next() *Backend {
-	next := int(p.current % uint64(len(p.backends)))
-	p.current++
-	return p.backends[next]
-}
-
-func (p *BackendPool) GetNextAlive() *Backend {
-	next := p.Next()
-	for range p.backends {
-		if next.IsAlive() {
-			return next
-		}
-		next = p.Next()
-	}
-	return nil
+func (p *BackendPool) GetBackends() []*Backend {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	
+	backends := make([]*Backend, len(p.Backends))
+	copy(backends, p.Backends)
+	return backends
 }
 
 func (p *BackendPool) MarkBackendStatus(backendURL *url.URL, alive bool) {
-	for _, backend := range p.backends {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	for _, backend := range p.Backends {
 		if backend.URL.String() == backendURL.String() {
 			backend.SetAlive(alive)
 			return

@@ -7,10 +7,6 @@ type LoadBalancer struct {
 	strategy Strategy
 }
 
-type Strategy interface {
-	GetNextPeer(*BackendPool) *Backend
-}
-
 func NewLoadBalancer(pool *BackendPool, strategy Strategy) *LoadBalancer {
 	return &LoadBalancer{
 		pool:     pool,

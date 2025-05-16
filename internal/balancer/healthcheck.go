@@ -4,20 +4,23 @@ import (
 	"context"
 	"net"
 	"net/url"
+	"sync"
 	"time"
 )
 
 type HealthChecker struct {
 	pool     *BackendPool
-	interval time.Duration	
+	interval time.Duration
+	timeout  time.Duration
 }
 
-func NewHealthCheck(pool *BackendPool, interval time.Duration) *HealthChecker {
+func NewHealthChecker(pool *BackendPool, interval time.Duration) *HealthChecker {
 	return &HealthChecker{
 		pool:     pool,
 		interval: interval,
+		timeout:  2 * time.Second, 
 	}
-}	
+}
 
 func (hc *HealthChecker) Start(ctx context.Context) {
 	ticker := time.NewTicker(hc.interval)
@@ -34,15 +37,22 @@ func (hc *HealthChecker) Start(ctx context.Context) {
 }
 
 func (hc *HealthChecker) healthCheck() {
-	for _, b := range hc.pool.backends {
-		status := isBackendAlive(b.URL)
-		b.SetAlive(status)
+	var wg sync.WaitGroup
+
+	for _, b := range hc.pool.Backends {
+		wg.Add(1)
+		go func(backend *Backend) {
+			defer wg.Done()
+			status := hc.isBackendAlive(backend.URL)
+			backend.SetAlive(status)
+		}(b)
 	}
+
+	wg.Wait()
 }
 
-func isBackendAlive(u *url.URL) bool {
-	timeout := 2 * time.Second
-	conn, err := net.DialTimeout("tcp", u.Host, timeout)
+func (hc *HealthChecker) isBackendAlive(u *url.URL) bool {
+	conn, err := net.DialTimeout("tcp", u.Host, hc.timeout)
 	if err != nil {
 		return false
 	}

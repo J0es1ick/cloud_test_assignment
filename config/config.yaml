@@ -1,10 +1,19 @@
 server:
   port: "8080"
 
+database:
+  host: "postgres"
+  port: "5432"
+  user: "postgres"
+  password: "12345"
+  name: "balancer"
+  sslmode: "disable"
+  connect_timeout: "5s"
+
 backends:
-  - "http://backend1:8000"
-  - "http://backend2:8000"
+  - "http://backend1:80"
+  - "http://backend2:80"
 
 rate_limit:
   default_capacity: 100
-  default_rate: 1s
+  default_rate: "1s"

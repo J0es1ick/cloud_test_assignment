@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log"
+	"time"
 
 	"github.com/J0es1ick/test-assignment/internal/config"
 	_ "github.com/lib/pq"
@@ -16,7 +18,7 @@ type Storage interface {
 }
 
 type Database struct {
-	db *sql.DB
+	DB *sql.DB
 }
 
 func NewDatabase(cfg *config.Config) (*Database, error) {
@@ -40,11 +42,11 @@ func NewDatabase(cfg *config.Config) (*Database, error) {
 		return nil, err
 	}
 
-	return &Database{db: db}, nil
+	return &Database{DB: db}, nil
 }
 
 func (s *Database) Init(ctx context.Context) error {
-	_, err := s.db.ExecContext(ctx, `
+	_, err := s.DB.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS ratelimit (
 			key TEXT PRIMARY KEY,
             capacity INTEGER NOT NULL,
@@ -63,22 +65,40 @@ func (s *Database) Init(ctx context.Context) error {
 }
 
 func (s *Database) Get(ctx context.Context, key string) (*TokenBucket, bool, error) {
-	row := s.db.QueryRowContext(ctx, "SELECT capacity, tokens, rate, last_refill FROM ratelimit WHERE key = $1", key)
+    row := s.DB.QueryRowContext(ctx, 
+        "SELECT capacity, tokens, rate, last_refill FROM ratelimit WHERE key = $1", 
+        key)
 
-	var tb TokenBucket
-	err := row.Scan(&tb.capacity, &tb.tokens, &tb.rate, &tb.lastRefill)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, false, nil
-		}
-		return nil, false, err
-	}
+    var (
+        capacity   int
+        tokens     int
+        rateStr    string
+        lastRefill time.Time
+    )
 
-	return &tb, true, nil
+    err := row.Scan(&capacity, &tokens, &rateStr, &lastRefill)
+    if err != nil {
+        if err == sql.ErrNoRows {
+            return nil, false, nil
+        }
+        return nil, false, err
+    }
+
+    rate, err := time.ParseDuration(rateStr)
+    if err != nil {
+        return nil, false, fmt.Errorf("invalid rate format: %w", err)
+    }
+
+    return &TokenBucket{
+        capacity:   capacity,
+        tokens:     tokens,
+        rate:       rate,
+        lastRefill: lastRefill,
+    }, true, nil
 }
 
 func (s *Database) Set(ctx context.Context, key string, bucket *TokenBucket) error {
-	_, err := s.db.ExecContext(ctx, `
+	_, err := s.DB.ExecContext(ctx, `
 		INSERT INTO ratelimit (key, capacity, tokens, rate, last_refill)
 		VALUES ($1, $2, $3, $4, $5)
 		ON CONFLICT (key) DO UPDATE SET
@@ -93,29 +113,56 @@ func (s *Database) Set(ctx context.Context, key string, bucket *TokenBucket) err
 }
 
 func (s *Database) Update(ctx context.Context, key string, updateFunc func(bucket *TokenBucket) (*TokenBucket, error)) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+    tx, err := s.DB.BeginTx(ctx, nil)
     if err != nil {
         return err
     }
     defer tx.Rollback()
     
     bucket, exists, err := s.Get(ctx, key)
-    if err != nil {
+    if err != nil && err != sql.ErrNoRows {
         return err
     }
     
     if !exists {
-        return sql.ErrNoRows
+        bucket = nil 
     }
     
     newBucket, err := updateFunc(bucket)
     if err != nil {
         return err
     }
-	
+    
     if err := s.Set(ctx, key, newBucket); err != nil {
         return err
     }
     
     return tx.Commit()
+}
+
+func (s *Database) StartCleanupWorker(ctx context.Context, interval time.Duration) {
+    go func() {
+        ticker := time.NewTicker(interval)
+        defer ticker.Stop()
+
+        for {
+            select {
+            case <-ticker.C:
+                if err := s.cleanupOldBuckets(ctx, 24*time.Hour); err != nil {
+                    log.Printf("cleanup error: %v", err)
+                }
+            case <-ctx.Done():
+                return
+            }
+        }
+    }()
+}
+
+func (s *Database) cleanupOldBuckets(ctx context.Context, olderThan time.Duration) error {
+    _, err := s.DB.ExecContext(ctx,
+        `DELETE FROM ratelimit 
+         WHERE last_refill < $1`,
+        time.Now().Add(-olderThan),
+    )
+    return err
 }

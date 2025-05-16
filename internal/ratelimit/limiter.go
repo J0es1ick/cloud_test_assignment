@@ -2,6 +2,8 @@ package ratelimit
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"log"
 	"net/http"
 	"sync"
@@ -37,8 +39,12 @@ func (l *TokenBucketLimiter) Allow(ctx context.Context, key string) (bool, error
             b = NewTokenBucket(l.defaultCapacity, l.defaultRate)
         }
         allowed = b.Take()
-        return b, nil 
+        return b, nil
     })
+
+    if errors.Is(err, sql.ErrNoRows) {
+        return false, nil
+    }
 
     return allowed, err
 }
